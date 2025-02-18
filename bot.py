@@ -23,23 +23,24 @@ logger = logging.getLogger(__name__)
 
 def setup_credentials():
     """Setup Google Cloud credentials for Railway deployment"""
-    creds_json = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
-    if creds_json:
-        # We're on Railway, write the credentials file
+    creds = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+    if not creds:
+        raise ValueError("GOOGLE_APPLICATION_CREDENTIALS not set")
+    
+    # Check if the value is a JSON string
+    try:
+        creds_data = json.loads(creds)
+        # If we got here, it's valid JSON content
         creds_path = 'google-credentials.json'
-        try:
-            creds_data = json.loads(creds_json)
-            with open(creds_path, 'w') as f:
-                json.dump(creds_data, f)
-            os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = creds_path
-            logger.info("Successfully wrote Google Cloud credentials from environment")
-        except Exception as e:
-            logger.error(f"Failed to write Google Cloud credentials: {str(e)}")
-            raise
-    else:
-        # Local development, use existing file
-        if not os.path.exists(os.getenv('GOOGLE_APPLICATION_CREDENTIALS', '')):
+        with open(creds_path, 'w') as f:
+            json.dump(creds_data, f)
+        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = creds_path
+        logger.info("Successfully wrote Google Cloud credentials from JSON content")
+    except json.JSONDecodeError:
+        # Not JSON, treat as file path
+        if not os.path.exists(creds):
             raise ValueError("GOOGLE_APPLICATION_CREDENTIALS file not found")
+        logger.info("Using existing credentials file")
 
 @dataclass
 class ThreadContext:

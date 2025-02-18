@@ -97,8 +97,17 @@ class RagBot:
 
     def _setup_event_handlers(self):
         """Set up Slack event handlers"""
-        self.app.event("app_mention")(self._handle_mention)
-        self.app.event("message")(self._handle_message)
+        logger.info("Setting up Slack event handlers")
+        # Register async event handlers
+        @self.app.event("app_mention")
+        async def handle_mention(event, say):
+            await self._handle_mention(event, say)
+            
+        @self.app.event("message")
+        async def handle_message(event):
+            await self._handle_message(event)
+            
+        logger.info("Event handlers registered successfully")
 
     def _get_thread_context(self, channel_id: str, thread_ts: Optional[str] = None) -> ThreadContext:
         """Get or create thread context"""
@@ -115,14 +124,19 @@ class RagBot:
     async def _handle_mention(self, event, say):
         """Handle when bot is mentioned"""
         try:
+            logger.info(f"Received mention event: {event}")
+            
             # Get thread context
             thread_ts = event.get("thread_ts", event.get("ts"))
             context = self._get_thread_context(event["channel"], thread_ts)
+            logger.info(f"Thread context created for channel: {event['channel']}, thread: {thread_ts}")
             
             # Extract question (remove bot mention)
             text = re.sub(r'<@[^>]+>', '', event["text"]).strip()
+            logger.info(f"Extracted question: {text}")
             
             if not text:
+                logger.info("Empty question received, sending help message")
                 await say(
                     text="Please ask a question! For example: '@Ragbot what is Newspeak House?'",
                     thread_ts=thread_ts
@@ -131,18 +145,23 @@ class RagBot:
             
             # Build context-aware prompt
             prompt = self._build_prompt(text, context)
+            logger.info(f"Built prompt: {prompt}")
             
             # Get response from RAG
+            logger.info("Querying RAG pipeline...")
             response = self.rag_pipeline.query(prompt)
+            logger.info(f"RAG response received: {response}")
             
             # Send response
+            logger.info("Sending response to Slack...")
             await say(
                 text=response,
                 thread_ts=thread_ts
             )
+            logger.info("Response sent successfully")
             
         except Exception as e:
-            logger.error(f"Error handling mention: {str(e)}")
+            logger.error(f"Error handling mention: {str(e)}", exc_info=True)
             await say(
                 text="Sorry, I encountered an error processing your request. Please try again later.",
                 thread_ts=thread_ts
@@ -153,11 +172,15 @@ class RagBot:
         try:
             # Skip bot messages
             if event.get("bot_id"):
+                logger.debug("Skipping bot message")
                 return
                 
+            logger.info(f"Received message event: {event}")
+            
             # Get thread context
             thread_ts = event.get("thread_ts", event.get("ts"))
             context = self._get_thread_context(event["channel"], thread_ts)
+            logger.info(f"Updated thread context for channel: {event['channel']}, thread: {thread_ts}")
             
             # Add message to context
             context.messages.append(event)
@@ -165,9 +188,10 @@ class RagBot:
             # Limit context size
             if len(context.messages) > 10:
                 context.messages = context.messages[-10:]
+            logger.info(f"Thread context updated, current size: {len(context.messages)}")
                 
         except Exception as e:
-            logger.error(f"Error handling message: {str(e)}")
+            logger.error(f"Error handling message: {str(e)}", exc_info=True)
 
     def _build_prompt(self, question: str, context: ThreadContext) -> str:
         """Build a context-aware prompt"""
@@ -189,14 +213,16 @@ class RagBot:
     def start(self):
         """Start the bot"""
         try:
+            logger.info("Starting bot in Socket Mode...")
             handler = SocketModeHandler(
                 app=self.app,
                 app_token=os.environ["SLACK_APP_TOKEN"]
             )
+            logger.info("Socket Mode handler created, starting...")
             handler.start()
             logger.info("Bot started successfully in Socket Mode")
         except Exception as e:
-            logger.error(f"Failed to start bot: {str(e)}")
+            logger.error(f"Failed to start bot: {str(e)}", exc_info=True)
             raise
 
 if __name__ == "__main__":

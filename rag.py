@@ -28,7 +28,7 @@ class RAGConfig:
     region: str = "us-central1"
     drive_folder_id: str = "1U8TEZKLv3h1F-x9CkNFfG8vimojyYikn"
     embedding_model: str = "publishers/google/models/text-embedding-004"
-    llm_model: str = "gemini-1.5-flash-001"  # Updated to match guide
+    llm_model: str = "gemini-2.0-flash-001"  # Updated to match guide
     chunk_size: int = 512
     chunk_overlap: int = 50
     similarity_top_k: int = 10
@@ -319,7 +319,7 @@ class RAGPipeline:
             if not self.rag_corpus:
                 raise ValueError("RAG corpus not initialized. Call setup_corpus() first.")
 
-            # Create RAG store
+            # Create RAG store with more aggressive retrieval
             logger.info("Creating RAG store...")
             rag_store = rag.VertexRagStore(
                 rag_corpora=[self.rag_corpus.name],
@@ -329,17 +329,23 @@ class RAGPipeline:
 
             # Create retrieval tool
             logger.info("Creating retrieval tool...")
-            rag_retrieval_tool = Tool.from_retrieval(
-                retrieval=rag.Retrieval(source=rag_store)
+            self.rag_retrieval_tool = Tool.from_retrieval(
+                retrieval=rag.Retrieval(
+                    source=rag_store,
+                    parameters={
+                        "max_chunks": 10,  # Retrieve more chunks
+                        "min_relevance_score": 0.5,  # Lower threshold for inclusion
+                    }
+                )
             )
 
             # Initialize LLM with RAG integration
             logger.info(f"Initializing LLM model: {self.config.llm_model}")
             self.llm = GenerativeModel(
                 self.config.llm_model,
-                tools=[rag_retrieval_tool],
+                tools=[self.rag_retrieval_tool],
                 generation_config={
-                    "temperature": 0.2,  # Lower temperature for more focused responses
+                    "temperature": 0.2,
                     "top_p": 0.8,
                     "top_k": 40,
                     "max_output_tokens": 1024,
@@ -360,33 +366,55 @@ class RAGPipeline:
                 raise ValueError("LLM not initialized. Call setup_llm() first.")
 
             # Create a more focused prompt with source attribution request
-            enhanced_prompt = f"""Based on the provided context, please answer the following question. For each piece of information you use, cite the source document in [square brackets] at the end of the relevant statement or paragraph:
-            
+            enhanced_prompt = f"""Based on the provided context, please answer the following question. For each piece of information you use, cite the source document in [square brackets] at the end of the relevant statement or paragraph.
+
 Question: {prompt}
 
-Please provide a clear, concise answer using only the information available in the context. If the information is not available in the context, please say so. Remember to cite your sources using [document name] format."""
+Please provide a clear, concise answer using only the information available in the context. If the information is not available in the context, please say so. Remember to cite your sources using [document name] format at the end of each statement that uses information from that source."""
 
-            response = self.llm.generate_content(enhanced_prompt)
+            # Generate response with citations
+            response = self.llm.generate_content(
+                enhanced_prompt,
+                generation_config={
+                    "temperature": 0.2,
+                    "top_p": 0.8,
+                    "top_k": 40,
+                    "max_output_tokens": 1024,
+                },
+                tools=[self.rag_retrieval_tool]  # Ensure retrieval tool is used
+            )
             
             # Track source documents and their Drive IDs
             sources = {}
             if hasattr(response, 'candidates') and response.candidates:
                 for candidate in response.candidates:
                     if hasattr(candidate, 'citation_metadata') and candidate.citation_metadata:
-                        logger.info("Sources used:")
+                        logger.info("Sources used in response:")
                         for citation in candidate.citation_metadata.citations:
                             source_name = citation.source
-                            # Extract Drive file ID if available
-                            file_id = citation.metadata.get('file_id') if hasattr(citation, 'metadata') else None
+                            # Extract file metadata
+                            metadata = citation.metadata if hasattr(citation, 'metadata') else {}
+                            file_id = metadata.get('file_id') if metadata else None
+                            
+                            # Log source details
+                            logger.info(f"Source: {source_name}")
+                            logger.info(f"File ID: {file_id}")
+                            logger.info(f"Metadata: {metadata}")
+                            
+                            # Store source info
                             sources[source_name] = file_id
-                            logger.info(f"- {source_name} (ID: {file_id})")
+                            
+                            # Ensure source is cited in text if not already
+                            if f"[{source_name}]" not in response.text:
+                                response.text = response.text.rstrip() + f" [{source_name}]"
 
             # Add source information to response
             response_with_sources = {
                 'text': response.text,
                 'sources': sources
             }
-
+            
+            logger.info(f"Final response with sources: {response_with_sources}")
             return response_with_sources
 
         except Exception as e:

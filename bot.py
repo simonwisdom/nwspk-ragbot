@@ -98,14 +98,77 @@ class RagBot:
     def _setup_event_handlers(self):
         """Set up Slack event handlers"""
         logger.info("Setting up Slack event handlers")
-        # Register async event handlers
+        
+        # Register event handlers using middleware
         @self.app.event("app_mention")
-        async def handle_mention(event, say):
-            await self._handle_mention(event, say)
+        def handle_mention(event, say):
+            try:
+                logger.info(f"Received mention event: {event}")
+                # Get thread context
+                thread_ts = event.get("thread_ts", event.get("ts"))
+                context = self._get_thread_context(event["channel"], thread_ts)
+                logger.info(f"Thread context created for channel: {event['channel']}, thread: {thread_ts}")
+                
+                # Extract question (remove bot mention)
+                text = re.sub(r'<@[^>]+>', '', event["text"]).strip()
+                logger.info(f"Extracted question: {text}")
+                
+                if not text:
+                    logger.info("Empty question received, sending help message")
+                    say(
+                        text="Please ask a question! For example: '@Ragbot what is Newspeak House?'",
+                        thread_ts=thread_ts
+                    )
+                    return
+                
+                # Build context-aware prompt
+                prompt = self._build_prompt(text, context)
+                logger.info(f"Built prompt: {prompt}")
+                
+                # Get response from RAG
+                logger.info("Querying RAG pipeline...")
+                response = self.rag_pipeline.query(prompt)
+                logger.info(f"RAG response received: {response}")
+                
+                # Send response
+                logger.info("Sending response to Slack...")
+                say(
+                    text=response,
+                    thread_ts=thread_ts
+                )
+                logger.info("Response sent successfully")
+            except Exception as e:
+                logger.error(f"Error handling mention: {str(e)}", exc_info=True)
+                say(
+                    text="Sorry, I encountered an error processing your request. Please try again later.",
+                    thread_ts=thread_ts
+                )
             
         @self.app.event("message")
-        async def handle_message(event):
-            await self._handle_message(event)
+        def handle_message(event):
+            try:
+                # Skip bot messages
+                if event.get("bot_id"):
+                    logger.debug("Skipping bot message")
+                    return
+                    
+                logger.info(f"Received message event: {event}")
+                
+                # Get thread context
+                thread_ts = event.get("thread_ts", event.get("ts"))
+                context = self._get_thread_context(event["channel"], thread_ts)
+                logger.info(f"Updated thread context for channel: {event['channel']}, thread: {thread_ts}")
+                
+                # Add message to context
+                context.messages.append(event)
+                
+                # Limit context size
+                if len(context.messages) > 10:
+                    context.messages = context.messages[-10:]
+                logger.info(f"Thread context updated, current size: {len(context.messages)}")
+                    
+            except Exception as e:
+                logger.error(f"Error handling message: {str(e)}", exc_info=True)
             
         logger.info("Event handlers registered successfully")
 
@@ -120,78 +183,6 @@ class RagBot:
                     thread_ts=thread_ts
                 )
             return self.thread_contexts[context_key]
-
-    async def _handle_mention(self, event, say):
-        """Handle when bot is mentioned"""
-        try:
-            logger.info(f"Received mention event: {event}")
-            
-            # Get thread context
-            thread_ts = event.get("thread_ts", event.get("ts"))
-            context = self._get_thread_context(event["channel"], thread_ts)
-            logger.info(f"Thread context created for channel: {event['channel']}, thread: {thread_ts}")
-            
-            # Extract question (remove bot mention)
-            text = re.sub(r'<@[^>]+>', '', event["text"]).strip()
-            logger.info(f"Extracted question: {text}")
-            
-            if not text:
-                logger.info("Empty question received, sending help message")
-                await say(
-                    text="Please ask a question! For example: '@Ragbot what is Newspeak House?'",
-                    thread_ts=thread_ts
-                )
-                return
-            
-            # Build context-aware prompt
-            prompt = self._build_prompt(text, context)
-            logger.info(f"Built prompt: {prompt}")
-            
-            # Get response from RAG
-            logger.info("Querying RAG pipeline...")
-            response = self.rag_pipeline.query(prompt)
-            logger.info(f"RAG response received: {response}")
-            
-            # Send response
-            logger.info("Sending response to Slack...")
-            await say(
-                text=response,
-                thread_ts=thread_ts
-            )
-            logger.info("Response sent successfully")
-            
-        except Exception as e:
-            logger.error(f"Error handling mention: {str(e)}", exc_info=True)
-            await say(
-                text="Sorry, I encountered an error processing your request. Please try again later.",
-                thread_ts=thread_ts
-            )
-
-    async def _handle_message(self, event):
-        """Handle messages to maintain thread context"""
-        try:
-            # Skip bot messages
-            if event.get("bot_id"):
-                logger.debug("Skipping bot message")
-                return
-                
-            logger.info(f"Received message event: {event}")
-            
-            # Get thread context
-            thread_ts = event.get("thread_ts", event.get("ts"))
-            context = self._get_thread_context(event["channel"], thread_ts)
-            logger.info(f"Updated thread context for channel: {event['channel']}, thread: {thread_ts}")
-            
-            # Add message to context
-            context.messages.append(event)
-            
-            # Limit context size
-            if len(context.messages) > 10:
-                context.messages = context.messages[-10:]
-            logger.info(f"Thread context updated, current size: {len(context.messages)}")
-                
-        except Exception as e:
-            logger.error(f"Error handling message: {str(e)}", exc_info=True)
 
     def _build_prompt(self, question: str, context: ThreadContext) -> str:
         """Build a context-aware prompt"""

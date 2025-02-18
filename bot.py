@@ -161,22 +161,30 @@ class RagBot:
                 )
             return self.thread_contexts[context_key]
 
+    def _validate_question(self, text: str) -> bool:
+        """Validate if the question is meaningful enough to process"""
+        # Remove extra whitespace and punctuation
+        cleaned = text.strip().strip('?!.,')
+        # Check if question is too short or just punctuation
+        return len(cleaned.split()) > 1
+
     def _build_prompt(self, question: str, context: ThreadContext) -> str:
         """Build a context-aware prompt"""
         prompt_parts = [
             "You are a helpful assistant for Newspeak House. Answer questions directly and concisely.",
             "If you're using information from specific documents, mention them naturally in your response.",
             "Format any document references as '(Source: document name)' at the end of relevant sentences.",
-            "\nQuestion: " + question
         ]
         
         # Add conversation context if there's more than just the current question
         if context.messages and len(context.messages) > 1:
-            prompt_parts.insert(1, "\nPrevious conversation:")
+            prompt_parts.append("\nPrevious conversation:")
             for msg in context.messages[:-1]:  # Exclude the current question
-                user = f"<@{msg['user']}>"
-                text = msg["text"]
-                prompt_parts.insert(2, f"{user}: {text}")
+                text = re.sub(r'<@[^>]+>', '', msg["text"]).strip()  # Remove user mentions
+                prompt_parts.append(f"User: {text}")
+            prompt_parts.append("")  # Add blank line after context
+        
+        prompt_parts.append(f"Question: {question}")
         
         return "\n".join(prompt_parts)
 
@@ -186,20 +194,23 @@ class RagBot:
         sources = response_data.get('sources', {})
         
         # Replace citations with Slack-formatted links
-        for source_name, file_id in sources.items():
+        for source_name, source_info in sources.items():
+            file_id = source_info.get('file_id')
+            title = source_info.get('title', source_name)
+            
             if file_id:
                 # Create Drive link
                 drive_link = f"https://drive.google.com/file/d/{file_id}/view"
                 # Replace citation with linked version
                 text = text.replace(
                     f"[{source_name}]",
-                    f"<{drive_link}|{source_name}>"
+                    f"<{drive_link}|{title}>"
                 )
             else:
-                # If no file ID, just clean up the citation format
+                # If no file ID, just show the title
                 text = text.replace(
                     f"[{source_name}]",
-                    f"({source_name})"
+                    title
                 )
         
         return text
@@ -218,10 +229,11 @@ class RagBot:
             text = re.sub(r'<@[^>]+>', '', event["text"]).strip()
             logger.info(f"Extracted question: {text}")
             
-            if not text:
-                logger.info("Empty question received, sending help message")
+            # Validate question
+            if not text or not self._validate_question(text):
+                logger.info("Invalid or empty question received, sending help message")
                 say(
-                    text="Please ask a question! For example: '@Ragbot what is Newspeak House?'",
+                    text="Please ask a specific question about Newspeak House! For example: '@Ragbot what is Newspeak House?' or '@Ragbot what kind of events do you host?'",
                     thread_ts=thread_ts
                 )
                 return
@@ -249,7 +261,7 @@ class RagBot:
         except Exception as e:
             logger.error(f"Error handling mention: {str(e)}", exc_info=True)
             say(
-                text="Sorry, I encountered an error processing your request. Please try again later.",
+                text="Sorry, I encountered an error processing your request. Please try again with a more specific question.",
                 thread_ts=thread_ts
             )
 

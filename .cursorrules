@@ -81,3 +81,5 @@ Best Practices:
 - Follow cloud-native development patterns
 
 Refer to the official documentation of Google Cloud VertexAI, uv, and Python for best practices and up-to-date APIs.
+
+When using Railway CLI, use --help if you aren't sure of the correct syntax

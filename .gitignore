@@ -57,4 +57,7 @@ htmlcov/
 .mypy_cache/ 
 
 
+# Cursor specific
 .cursorrules
+
+

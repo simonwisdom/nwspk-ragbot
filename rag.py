@@ -142,24 +142,43 @@ class RAGPipeline:
     def _check_corpus_needs_update(self, corpus_name: str, metadata: dict) -> bool:
         """Check if corpus needs to be updated with new files"""
         try:
+            # Add delay to respect rate limits
+            time.sleep(1)  # 1 second delay between API calls
+            
             # Check if the Drive folder ID has changed
             if metadata.get("drive_folder_id") != self.config.drive_folder_id:
                 logger.info("Drive folder ID has changed, corpus needs update")
                 return True
 
-            # Get current file count
-            current_files = list(rag.list_files(corpus_name=corpus_name))
-            current_count = len(current_files)
-            stored_count = metadata.get("file_count", 0)
+            # Get current file count with retry
+            max_retries = 3
+            retry_delay = 2  # seconds
+            
+            for attempt in range(max_retries):
+                try:
+                    current_files = list(rag.list_files(corpus_name=corpus_name))
+                    current_count = len(current_files)
+                    stored_count = metadata.get("file_count", 0)
 
-            if current_count != stored_count:
-                logger.info(f"File count mismatch: stored={stored_count}, current={current_count}")
-                return True
+                    if current_count != stored_count:
+                        logger.info(f"File count mismatch: stored={stored_count}, current={current_count}")
+                        return True
 
-            return False
+                    return False
+                    
+                except Exception as e:
+                    if "RATE_LIMIT_EXCEEDED" in str(e):
+                        if attempt < max_retries - 1:
+                            logger.warning(f"Rate limit exceeded, retrying in {retry_delay} seconds...")
+                            time.sleep(retry_delay)
+                            retry_delay *= 2  # Exponential backoff
+                            continue
+                    raise
+                    
         except Exception as e:
             logger.error(f"Error checking corpus update status: {str(e)}")
-            return True
+            # If we can't check, assume no update needed to avoid unnecessary operations
+            return False
 
     def _load_corpus_metadata(self) -> Optional[str]:
         """Load most recent corpus metadata from GCS"""
@@ -319,24 +338,18 @@ class RAGPipeline:
             if not self.rag_corpus:
                 raise ValueError("RAG corpus not initialized. Call setup_corpus() first.")
 
-            # Create RAG store with more aggressive retrieval
+            # Create RAG store with appropriate settings
             logger.info("Creating RAG store...")
             rag_store = rag.VertexRagStore(
                 rag_corpora=[self.rag_corpus.name],
-                similarity_top_k=self.config.similarity_top_k,
-                vector_distance_threshold=self.config.vector_distance_threshold,
+                similarity_top_k=10,  # Increased from default
+                vector_distance_threshold=0.5,  # More permissive threshold
             )
 
-            # Create retrieval tool
+            # Create retrieval tool (without unsupported parameters)
             logger.info("Creating retrieval tool...")
             self.rag_retrieval_tool = Tool.from_retrieval(
-                retrieval=rag.Retrieval(
-                    source=rag_store,
-                    parameters={
-                        "max_chunks": 10,  # Retrieve more chunks
-                        "min_relevance_score": 0.5,  # Lower threshold for inclusion
-                    }
-                )
+                retrieval=rag.Retrieval(source=rag_store)
             )
 
             # Initialize LLM with RAG integration

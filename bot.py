@@ -101,48 +101,8 @@ class RagBot:
         
         # Register event handlers using middleware
         @self.app.event("app_mention")
-        def handle_mention(event, say):
-            try:
-                logger.info(f"Received mention event: {event}")
-                # Get thread context
-                thread_ts = event.get("thread_ts", event.get("ts"))
-                context = self._get_thread_context(event["channel"], thread_ts)
-                logger.info(f"Thread context created for channel: {event['channel']}, thread: {thread_ts}")
-                
-                # Extract question (remove bot mention)
-                text = re.sub(r'<@[^>]+>', '', event["text"]).strip()
-                logger.info(f"Extracted question: {text}")
-                
-                if not text:
-                    logger.info("Empty question received, sending help message")
-                    say(
-                        text="Please ask a question! For example: '@Ragbot what is Newspeak House?'",
-                        thread_ts=thread_ts
-                    )
-                    return
-                
-                # Build context-aware prompt
-                prompt = self._build_prompt(text, context)
-                logger.info(f"Built prompt: {prompt}")
-                
-                # Get response from RAG
-                logger.info("Querying RAG pipeline...")
-                response = self.rag_pipeline.query(prompt)
-                logger.info(f"RAG response received: {response}")
-                
-                # Send response
-                logger.info("Sending response to Slack...")
-                say(
-                    text=response,
-                    thread_ts=thread_ts
-                )
-                logger.info("Response sent successfully")
-            except Exception as e:
-                logger.error(f"Error handling mention: {str(e)}", exc_info=True)
-                say(
-                    text="Sorry, I encountered an error processing your request. Please try again later.",
-                    thread_ts=thread_ts
-                )
+        async def handle_mention(event, say):
+            await self._handle_mention(event, say)
             
         @self.app.event("message")
         def handle_message(event):
@@ -186,20 +146,95 @@ class RagBot:
 
     def _build_prompt(self, question: str, context: ThreadContext) -> str:
         """Build a context-aware prompt"""
-        prompt_parts = ["Based on the following context and question, provide a detailed answer:"]
+        prompt_parts = [
+            "You are a helpful assistant for Newspeak House. Answer questions directly and concisely.",
+            "If you're using information from specific documents, mention them naturally in your response.",
+            "Format any document references as '(Source: document name)' at the end of relevant sentences.",
+            "\nQuestion: " + question
+        ]
         
-        # Add conversation context if available
-        if context.messages:
-            prompt_parts.append("\nConversation context:")
-            for msg in context.messages:
+        # Add conversation context if there's more than just the current question
+        if context.messages and len(context.messages) > 1:
+            prompt_parts.insert(1, "\nPrevious conversation:")
+            for msg in context.messages[:-1]:  # Exclude the current question
                 user = f"<@{msg['user']}>"
                 text = msg["text"]
-                prompt_parts.append(f"{user}: {text}")
-        
-        # Add the question
-        prompt_parts.append(f"\nQuestion: {question}")
+                prompt_parts.insert(2, f"{user}: {text}")
         
         return "\n".join(prompt_parts)
+
+    def _format_response_for_slack(self, response_data: dict) -> str:
+        """Format the RAG response for Slack display"""
+        text = response_data['text']
+        sources = response_data.get('sources', {})
+        
+        # Replace citations with Slack-formatted links
+        for source_name, file_id in sources.items():
+            if file_id:
+                # Create Drive link
+                drive_link = f"https://drive.google.com/file/d/{file_id}/view"
+                # Replace citation with linked version
+                text = text.replace(
+                    f"[{source_name}]",
+                    f"<{drive_link}|{source_name}>"
+                )
+            else:
+                # If no file ID, just clean up the citation format
+                text = text.replace(
+                    f"[{source_name}]",
+                    f"({source_name})"
+                )
+        
+        return text
+
+    async def _handle_mention(self, event, say):
+        """Handle when bot is mentioned"""
+        try:
+            logger.info(f"Received mention event: {event}")
+            
+            # Get thread context
+            thread_ts = event.get("thread_ts", event.get("ts"))
+            context = self._get_thread_context(event["channel"], thread_ts)
+            logger.info(f"Thread context created for channel: {event['channel']}, thread: {thread_ts}")
+            
+            # Extract question (remove bot mention)
+            text = re.sub(r'<@[^>]+>', '', event["text"]).strip()
+            logger.info(f"Extracted question: {text}")
+            
+            if not text:
+                logger.info("Empty question received, sending help message")
+                say(
+                    text="Please ask a question! For example: '@Ragbot what is Newspeak House?'",
+                    thread_ts=thread_ts
+                )
+                return
+            
+            # Build context-aware prompt
+            prompt = self._build_prompt(text, context)
+            logger.info(f"Built prompt: {prompt}")
+            
+            # Get response from RAG
+            logger.info("Querying RAG pipeline...")
+            response_data = self.rag_pipeline.query(prompt)
+            logger.info(f"RAG response received: {response_data}")
+            
+            # Format response for Slack
+            formatted_response = self._format_response_for_slack(response_data)
+            
+            # Send response
+            logger.info("Sending response to Slack...")
+            say(
+                text=formatted_response,
+                thread_ts=thread_ts
+            )
+            logger.info("Response sent successfully")
+            
+        except Exception as e:
+            logger.error(f"Error handling mention: {str(e)}", exc_info=True)
+            say(
+                text="Sorry, I encountered an error processing your request. Please try again later.",
+                thread_ts=thread_ts
+            )
 
     def start(self):
         """Start the bot"""

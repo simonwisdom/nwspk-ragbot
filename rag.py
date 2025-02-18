@@ -368,15 +368,26 @@ Please provide a clear, concise answer using only the information available in t
 
             response = self.llm.generate_content(enhanced_prompt)
             
-            # Log source documents used
+            # Track source documents and their Drive IDs
+            sources = {}
             if hasattr(response, 'candidates') and response.candidates:
                 for candidate in response.candidates:
                     if hasattr(candidate, 'citation_metadata') and candidate.citation_metadata:
                         logger.info("Sources used:")
                         for citation in candidate.citation_metadata.citations:
-                            logger.info(f"- {citation.source}")
+                            source_name = citation.source
+                            # Extract Drive file ID if available
+                            file_id = citation.metadata.get('file_id') if hasattr(citation, 'metadata') else None
+                            sources[source_name] = file_id
+                            logger.info(f"- {source_name} (ID: {file_id})")
 
-            return response.text
+            # Add source information to response
+            response_with_sources = {
+                'text': response.text,
+                'sources': sources
+            }
+
+            return response_with_sources
 
         except Exception as e:
             logger.error(f"Failed to generate response: {str(e)}", exc_info=True)

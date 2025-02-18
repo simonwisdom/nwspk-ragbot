@@ -189,8 +189,12 @@ class RagBot:
     def start(self):
         """Start the bot"""
         try:
-            self.app.start(port=int(os.environ.get("PORT", 3000)))
-            logger.info("Bot started successfully")
+            handler = SocketModeHandler(
+                app=self.app,
+                app_token=os.environ["SLACK_APP_TOKEN"]
+            )
+            handler.start()
+            logger.info("Bot started successfully in Socket Mode")
         except Exception as e:
             logger.error(f"Failed to start bot: {str(e)}")
             raise

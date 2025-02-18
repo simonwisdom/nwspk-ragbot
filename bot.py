@@ -82,7 +82,8 @@ class RagBot:
                 region=os.environ.get("VERTEX_REGION", "us-central1"),
                 service_account_path=os.environ["GOOGLE_APPLICATION_CREDENTIALS"],
                 drive_folder_id=os.environ["DRIVE_FOLDER_ID"],
-                cleanup_corpus=False
+                cleanup_corpus=False,
+                bucket_name=f"{os.environ['GOOGLE_CLOUD_PROJECT']}-rag-storage"
             )
             
             self.rag_pipeline = RAGPipeline(config)

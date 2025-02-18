@@ -8,6 +8,7 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 import threading
 from dotenv import load_dotenv
+import asyncio
 
 from rag import RAGPipeline, RAGConfig
 
@@ -101,8 +102,16 @@ class RagBot:
         
         # Register event handlers using middleware
         @self.app.event("app_mention")
-        async def handle_mention(event, say):
-            await self._handle_mention(event, say)
+        def handle_mention(event, say):
+            # Run the async handler in the event loop
+            future = asyncio.run_coroutine_threadsafe(
+                self._handle_mention(event, say),
+                asyncio.get_event_loop()
+            )
+            try:
+                future.result()  # Wait for the coroutine to complete
+            except Exception as e:
+                logger.error(f"Error in async mention handler: {str(e)}", exc_info=True)
             
         @self.app.event("message")
         def handle_message(event):
@@ -240,6 +249,11 @@ class RagBot:
         """Start the bot"""
         try:
             logger.info("Starting bot in Socket Mode...")
+            
+            # Create event loop for async operations
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
             handler = SocketModeHandler(
                 app=self.app,
                 app_token=os.environ["SLACK_APP_TOKEN"]

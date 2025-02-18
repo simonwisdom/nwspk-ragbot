@@ -191,13 +191,33 @@ class RAGPipeline:
             ))
             
             if not blobs:
+                logger.info("No existing corpus metadata found in GCS")
                 return None
                 
             # Get the first (and only) blob
             latest_blob = blobs[0]
             metadata = json.loads(latest_blob.download_as_string())
             logger.info(f"Loaded metadata from: {latest_blob.name}")
-            return metadata.get("corpus_name")
+            
+            # Verify corpus exists in Vertex AI
+            corpus_name = metadata.get("corpus_name")
+            if corpus_name:
+                try:
+                    # Try to access the corpus
+                    rag.get_corpus(name=corpus_name)
+                    logger.info(f"Verified corpus exists in Vertex AI: {corpus_name}")
+                    return corpus_name
+                except Exception as e:
+                    logger.warning(f"Found metadata but corpus no longer exists in Vertex AI: {str(e)}")
+                    # Delete the stale metadata since corpus doesn't exist
+                    try:
+                        latest_blob.delete()
+                        logger.info("Deleted stale corpus metadata")
+                    except Exception as del_err:
+                        logger.warning(f"Failed to delete stale metadata: {str(del_err)}")
+                    return None
+            return None
+            
         except Exception as e:
             logger.error(f"Failed to load corpus metadata: {str(e)}")
             return None
@@ -240,9 +260,9 @@ class RAGPipeline:
                         return True
                         
                     except Exception as e:
-                        logger.warning(f"Could not reuse corpus {corpus_name}: {str(e)}")
-                        logger.info("Creating new corpus...")
-                        # Continue to create new corpus
+                        logger.warning(f"Could not reuse corpus {corpus_name}, creating new one: {str(e)}")
+                else:
+                    logger.info("No valid existing corpus found, creating new one")
 
             # Create new corpus if we couldn't reuse existing one
             logger.info("Starting new RAG corpus setup...")

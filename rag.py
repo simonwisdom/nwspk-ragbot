@@ -379,11 +379,11 @@ class RAGPipeline:
                 raise ValueError("LLM not initialized. Call setup_llm() first.")
 
             # Create a more focused prompt with source attribution request
-            enhanced_prompt = f"""Based on the provided context, please answer the following question. For each piece of information you use, cite the source document in [square brackets] at the end of the relevant statement or paragraph.
+            enhanced_prompt = f"""Based on the provided context, please answer the following question. When citing sources, use [Document Title] format immediately after the relevant information. If you're not using any specific source for a statement, don't add a citation.
 
 Question: {prompt}
 
-Please provide a clear, concise answer using only the information available in the context. If the information is not available in the context, please say so. Remember to cite your sources using [document name] format at the end of each statement that uses information from that source."""
+Please provide a clear, concise answer using only the information available in the context. If you can't find relevant information in the context, say so."""
 
             # Generate response with citations
             response = self.llm.generate_content(
@@ -394,7 +394,7 @@ Please provide a clear, concise answer using only the information available in t
                     "top_k": 40,
                     "max_output_tokens": 1024,
                 },
-                tools=[self.rag_retrieval_tool]  # Ensure retrieval tool is used
+                tools=[self.rag_retrieval_tool]
             )
             
             # Track source documents and their Drive IDs
@@ -405,21 +405,19 @@ Please provide a clear, concise answer using only the information available in t
                         logger.info("Sources used in response:")
                         for citation in candidate.citation_metadata.citations:
                             source_name = citation.source
-                            # Extract file metadata
                             metadata = citation.metadata if hasattr(citation, 'metadata') else {}
-                            file_id = metadata.get('file_id') if metadata else None
+                            file_id = metadata.get('file_id')
+                            title = metadata.get('title', source_name)
                             
-                            # Log source details
                             logger.info(f"Source: {source_name}")
                             logger.info(f"File ID: {file_id}")
-                            logger.info(f"Metadata: {metadata}")
+                            logger.info(f"Title: {title}")
                             
                             # Store source info
-                            sources[source_name] = file_id
-                            
-                            # Ensure source is cited in text if not already
-                            if f"[{source_name}]" not in response.text:
-                                response.text = response.text.rstrip() + f" [{source_name}]"
+                            sources[source_name] = {
+                                'file_id': file_id,
+                                'title': title
+                            }
 
             # Add source information to response
             response_with_sources = {
@@ -467,6 +465,116 @@ Please provide a clear, concise answer using only the information available in t
             
         except Exception as e:
             logging.error(f"Error during test query: {str(e)}")
+            raise
+
+    def list_corpus_files(self):
+        """List all files in the corpus with their metadata"""
+        try:
+            if not self.rag_corpus:
+                raise ValueError("RAG corpus not initialized")
+                
+            logger.info("Listing all files in corpus...")
+            files = list(rag.list_files(corpus_name=self.rag_corpus.name))
+            
+            # Group files by source
+            files_by_source = {}
+            for file in files:
+                source = getattr(file, 'source', 'unknown')
+                if source not in files_by_source:
+                    files_by_source[source] = []
+                files_by_source[source].append(file)
+            
+            # Print summary
+            logger.info(f"Found {len(files)} total files in corpus")
+            for source, source_files in files_by_source.items():
+                logger.info(f"Source '{source}': {len(source_files)} files")
+            
+            return files_by_source
+            
+        except Exception as e:
+            logger.error(f"Error listing corpus files: {str(e)}")
+            raise
+
+    def cleanup_corpus(self):
+        """Clean up the corpus by removing all files and reimporting from Drive"""
+        try:
+            if not self.rag_corpus:
+                raise ValueError("RAG corpus not initialized")
+                
+            logger.info("Starting corpus cleanup...")
+            
+            # Delete existing corpus
+            logger.info(f"Deleting corpus: {self.rag_corpus.name}")
+            rag.delete_corpus(name=self.rag_corpus.name)
+            
+            # Create new corpus
+            logger.info("Creating new corpus...")
+            self.rag_corpus = rag.create_corpus(
+                display_name="rag-corpus",
+                embedding_model_config=rag.EmbeddingModelConfig(
+                    publisher_model=self.config.embedding_model
+                )
+            )
+            
+            # Import files from Drive
+            logger.info(f"Importing files from Drive folder: {self.config.drive_folder_id}")
+            drive_folder_url = f"https://drive.google.com/drive/folders/{self.config.drive_folder_id}"
+            
+            import_response = rag.import_files(
+                corpus_name=self.rag_corpus.name,
+                paths=[drive_folder_url],
+                chunk_size=self.config.chunk_size,
+                chunk_overlap=self.config.chunk_overlap
+            )
+            
+            logger.info(f"Import response: {import_response}")
+            
+            # Wait for import to complete
+            logger.info("Waiting for import to complete...")
+            self._wait_for_import_completion()
+            
+            # Save new metadata
+            self._save_corpus_metadata(self.rag_corpus.name)
+            
+            # Reinitialize LLM with new corpus
+            logger.info("Reinitializing LLM...")
+            self.setup_llm()
+            
+            logger.info("Corpus cleanup completed successfully")
+            
+        except Exception as e:
+            logger.error(f"Error during corpus cleanup: {str(e)}")
+            raise
+
+    def _initialize_rag(self):
+        """Initialize RAG pipeline"""
+        try:
+            config = RAGConfig(
+                project_id=os.environ["GOOGLE_CLOUD_PROJECT"],
+                region=os.environ.get("VERTEX_REGION", "us-central1"),
+                service_account_path=os.environ["GOOGLE_APPLICATION_CREDENTIALS"],
+                drive_folder_id=os.environ["DRIVE_FOLDER_ID"],
+                cleanup_corpus=False,
+                bucket_name=f"{os.environ['GOOGLE_CLOUD_PROJECT']}-rag-storage"
+            )
+            
+            self.rag_pipeline = RAGPipeline(config)
+            
+            # List current files before setup
+            logger.info("Current corpus files before setup:")
+            self.list_corpus_files()
+            
+            self.rag_pipeline.setup_corpus()
+            self.rag_pipeline.setup_llm()
+            
+            # List files after setup
+            logger.info("Corpus files after setup:")
+            self.list_corpus_files()
+            
+            logger.info("RAG pipeline initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize RAG pipeline: {str(e)}")
             raise
 
 def main():

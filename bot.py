@@ -201,9 +201,13 @@ class RagBot:
             if file_id:
                 # Create Drive link
                 drive_link = f"https://drive.google.com/file/d/{file_id}/view"
-                # Replace citation with linked version
+                # Replace citation with linked version - handle both formats
                 text = text.replace(
                     f"[{source_name}]",
+                    f"<{drive_link}|{title}>"
+                )
+                text = text.replace(
+                    f"[{title}]",
                     f"<{drive_link}|{title}>"
                 )
             else:
@@ -212,6 +216,23 @@ class RagBot:
                     f"[{source_name}]",
                     title
                 )
+                text = text.replace(
+                    f"[{title}]",
+                    title
+                )
+        
+        # Add source list at the end if any sources were used
+        if sources:
+            text = text.rstrip()
+            text += "\n\nSources:"
+            for source_name, source_info in sources.items():
+                file_id = source_info.get('file_id')
+                title = source_info.get('title', source_name)
+                if file_id:
+                    drive_link = f"https://drive.google.com/file/d/{file_id}/view"
+                    text += f"\n• <{drive_link}|{title}>"
+                else:
+                    text += f"\n• {title}"
         
         return text
 

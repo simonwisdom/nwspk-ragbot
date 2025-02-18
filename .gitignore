@@ -55,3 +55,6 @@ railway.toml
 htmlcov/
 .pytest_cache/
 .mypy_cache/ 
+
+
+.cursorrules
